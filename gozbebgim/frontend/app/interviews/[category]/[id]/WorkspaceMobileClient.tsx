@@ -12,6 +12,7 @@ import {
 import { CodeEditor, CodeEditorRef } from "../../../../components/Editor";
 import { usePyodide, TestRunResult } from "../../../../hooks/usePyodide";
 import { toast, Toaster } from "sonner";
+import CodeShareModal from "../../../../components/CodeShareModal";
 
 type Tab = "question" | "workspace" | "tests";
 
@@ -141,6 +142,7 @@ export default function WorkspaceMobileClient({ initialParams }: Props) {
   const [hintCount, setHintCount] = useState(0);
   const [hintsList, setHintsList] = useState<string[]>([]);
   const [showSuccess, setShowSuccess] = useState(false);
+  const [showShareModal, setShowShareModal] = useState(false);
 
   const editorRef = useRef<CodeEditorRef>(null);
   const submittedRef = useRef(false);
@@ -522,10 +524,33 @@ export default function WorkspaceMobileClient({ initialParams }: Props) {
                   Sonraki →
                 </button>
               </div>
+              <button
+                onClick={() => setShowShareModal(true)}
+                className="mt-3 w-full py-2 rounded-xl bg-gradient-to-r from-sky-500/20 to-blue-500/20 border border-sky-400/30 text-sky-300 text-xs font-bold flex items-center justify-center gap-2"
+              >
+                <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
+                </svg>
+                Paylaş & Tweetle
+              </button>
             </div>
           </div>
         </div>
       )}
+
+      {/* 🆕 Share Modal */}
+      <CodeShareModal
+        open={showShareModal}
+        onClose={() => setShowShareModal(false)}
+        code={code}
+        language="python"
+        title={interview?.title}
+        category={category}
+        username={user?.username}
+        durationLabel={formatTime(seconds)}
+        passedCount={passed}
+        totalCount={total}
+      />
     </div>
   );
 }

@@ -325,26 +325,46 @@ function LoginFormInner() {
             </motion.div>
 
             {mode === "password" && (
-              <motion.div
-                initial={{ opacity: 0, x: -20 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ delay: 0.7 }}
-              >
-                <label className="block text-white/70 text-sm font-medium mb-2">
-                  Şifre
-                </label>
-                <input
-                  type="password"
-                  name="password"
-                  placeholder="••••••••"
-                  value={formData.password}
-                  onChange={handleChange}
-                  className={inputClass}
-                  required
-                  disabled={isLoading}
-                  autoComplete="current-password"
-                />
-              </motion.div>
+              <>
+                <motion.div
+                  initial={{ opacity: 0, x: -20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ delay: 0.7 }}
+                >
+                  <label className="block text-white/70 text-sm font-medium mb-2">
+                    Şifre
+                  </label>
+                  <input
+                    type="password"
+                    name="password"
+                    placeholder="••••••••"
+                    value={formData.password}
+                    onChange={handleChange}
+                    className={inputClass}
+                    required
+                    disabled={isLoading}
+                    autoComplete="current-password"
+                  />
+                </motion.div>
+
+                <motion.div
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  transition={{ delay: 0.8 }}
+                  className="flex justify-end -mt-2"
+                >
+                  <Link
+                    href={`/auth/forgot-password${
+                      formData.email
+                        ? `?email=${encodeURIComponent(formData.email)}`
+                        : ""
+                    }`}
+                    className="text-xs text-white/40 hover:text-amber-400 transition-colors"
+                  >
+                    Şifremi unuttum →
+                  </Link>
+                </motion.div>
+              </>
             )}
 
             <motion.button

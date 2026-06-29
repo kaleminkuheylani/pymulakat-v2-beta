@@ -1,6 +1,7 @@
-// hooks/useUser.ts — Inline user (solution_average_time dahil)
+// hooks/useUser.ts — Supabase SSR tabanlı, çoklu kaynaklardan token çıkarımı + auto-refresh.
 
 import { useState, useEffect, useCallback } from "react";
+import { getSupabaseBrowser } from "./useSupabaseBrowser";
 
 const AUTH_EVENT = "auth-state-changed";
 
@@ -14,8 +15,8 @@ export interface UserResponse {
   success_count?: number;
   fail_count?: number;
   success_rate?: number;
-  solution_average_time?: number;        // ✅ saniye cinsinden
-  solution_average_time_ms?: number;     // ✅ ms cinsinden
+  solution_average_time?: number;
+  solution_average_time_ms?: number;
 }
 
 export function notifyAuthChange() {
@@ -28,22 +29,83 @@ export function notifyAuthChange() {
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
+/**
+ * Supabase'in kullandığı storage key'leri dahil tüm olası konumlardan access_token çıkar.
+ * @supabase/ssr hem localStorage hem cookie kullanabilir; biz her iki kaynağı da tarıyoruz.
+ */
+function extractAccessToken(): string | null {
+  if (typeof window === "undefined") return null;
+
+  // 1) Bilinen storage key'ler
+  const knownKeys = [
+    "sb-gozbegim-auth-token",
+    "sb-gozbegim-auth-token-code-verifier", // PKCE
+  ];
+  for (const key of knownKeys) {
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) continue;
+      const parsed = JSON.parse(raw);
+      const token =
+        parsed?.access_token ||
+        parsed?.currentSession?.access_token ||
+        parsed?.session?.access_token;
+      if (token) return token;
+    } catch {
+      // ignore
+    }
+  }
+
+  // 2) "-auth-token" ile biten tüm key'leri tara
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (!key || !key.endsWith("-auth-token") || knownKeys.includes(key)) continue;
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) continue;
+      const parsed = JSON.parse(raw);
+      const token =
+        parsed?.access_token ||
+        parsed?.currentSession?.access_token ||
+        parsed?.session?.access_token;
+      if (token) return token;
+    } catch {
+      // ignore
+    }
+  }
+
+  // 3) Plain "token" key'i (backend'in eski login endpoint'i için fallback)
+  const plain = localStorage.getItem("token");
+  if (plain) return plain;
+
+  // 4) Cookies (SSR tarayıcıya yazabilir)
+  if (typeof document !== "undefined") {
+    const cookies = document.cookie.split(";");
+    for (const c of cookies) {
+      const [k, v] = c.trim().split("=");
+      if (k && v && (k.includes("auth-token") || k.includes("access-token"))) {
+        try {
+          const decoded = decodeURIComponent(v);
+          // JWT formatı (header.payload.signature)
+          if (decoded.startsWith("eyJ")) return decoded;
+          const parsed = JSON.parse(decoded);
+          if (parsed?.access_token) return parsed.access_token;
+          if (parsed?.[0]?.access_token) return parsed[0].access_token;
+        } catch {
+          // raw jwt olabilir
+          if (v.startsWith("eyJ")) return v;
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
 async function fetchMe(): Promise<UserResponse | null> {
   if (typeof window === "undefined") return null;
 
-  let token: string | null = null;
-  try {
-    const supabaseAuth = JSON.parse(
-      localStorage.getItem("sb-gozbegim-auth-token") ||
-        sessionStorage.getItem("sb-gozbegim-auth-token") ||
-        "{}"
-    );
-    token = supabaseAuth?.access_token;
-  } catch {}
-
-  if (!token) {
-    token = localStorage.getItem("token");
-  }
+  const token = extractAccessToken();
   if (!token) return null;
 
   try {
@@ -56,6 +118,15 @@ async function fetchMe(): Promise<UserResponse | null> {
 
     if (!res.ok) {
       if (res.status === 401 || res.status === 403) {
+        // Token expired/invalid — Supabase client'ı temizle
+        const supabase = getSupabaseBrowser();
+        if (supabase) {
+          try {
+            await supabase.auth.signOut();
+          } catch {
+            // ignore
+          }
+        }
         localStorage.removeItem("sb-gozbegim-auth-token");
         localStorage.removeItem("token");
         localStorage.removeItem("user");
@@ -66,7 +137,6 @@ async function fetchMe(): Promise<UserResponse | null> {
 
     const data = await res.json();
 
-    // ✅ Default değerler — boş user'da undefined patlaması önler
     return {
       id: data.id || "",
       email: data.email || "",
@@ -106,6 +176,8 @@ export function useUser() {
       setUser(data);
       if (data) {
         localStorage.setItem("user", JSON.stringify(data));
+      } else {
+        localStorage.removeItem("user");
       }
     } catch (err: unknown) {
       const message =
@@ -121,8 +193,28 @@ export function useUser() {
   useEffect(() => {
     fetchUser();
 
+    // Supabase tab'lar arası session değişikliğini dinle
+    const supabase = getSupabaseBrowser();
+    let sub: { unsubscribe: () => void } | null = null;
+    if (supabase) {
+      const { data } = supabase.auth.onAuthStateChange((_event, session) => {
+        if (session?.access_token) {
+          localStorage.setItem("token", session.access_token);
+          if (session.refresh_token) {
+            localStorage.setItem("refresh_token", session.refresh_token);
+          }
+        }
+        fetchUser();
+      });
+      sub = data.subscription;
+    }
+
     const onStorage = (e: StorageEvent) => {
-      if (e.key === "token" || e.key === "logout") {
+      if (
+        e.key === "token" ||
+        e.key === "logout" ||
+        e.key?.endsWith("-auth-token")
+      ) {
         fetchUser();
       }
     };
@@ -134,13 +226,23 @@ export function useUser() {
     return () => {
       window.removeEventListener("storage", onStorage);
       window.removeEventListener(AUTH_EVENT, onAuthChange);
+      sub?.unsubscribe();
     };
   }, [fetchUser]);
 
   const refresh = useCallback(() => fetchUser(), [fetchUser]);
 
-  const logout = useCallback(() => {
+  const logout = useCallback(async () => {
+    const supabase = getSupabaseBrowser();
+    if (supabase) {
+      try {
+        await supabase.auth.signOut();
+      } catch (err) {
+        console.warn("Supabase signOut error:", err);
+      }
+    }
     localStorage.removeItem("sb-gozbegim-auth-token");
+    localStorage.removeItem("sb-gozbegim-auth-token-code-verifier");
     localStorage.removeItem("token");
     localStorage.removeItem("user");
     localStorage.removeItem("refresh_token");
@@ -150,3 +252,5 @@ export function useUser() {
 
   return { user, loading, error, refresh, logout };
 }
+
+export { extractAccessToken };

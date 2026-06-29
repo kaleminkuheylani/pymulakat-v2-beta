@@ -14,6 +14,8 @@ import {
   Question,
   QuestionTests,
 } from "../../../../api/v2/questions";
+import CodeShareModal from "../../../../components/CodeShareModal";
+import TestCaseDrawer from "../../../../components/TestCaseDrawer";
 
 // ─── Constants ────────────────────────────────────────────
 const LEVEL_CONFIG: Record<string, { label: string; color: string; bg: string; border: string }> = {
@@ -93,6 +95,9 @@ export default function WorkspaceClient({ initialParams }: Props) {
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [attemptSubmitted, setAttemptSubmitted] = useState(false);
   const [seconds, setSeconds] = useState(0);
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [showTestDrawer, setShowTestDrawer] = useState(false);
+  const [hasAutoOpenedDrawer, setHasAutoOpenedDrawer] = useState(false);
 
   // ✅ Timer
   useEffect(() => {
@@ -187,6 +192,7 @@ export default function WorkspaceClient({ initialParams }: Props) {
     setIsRunning(true);
     setTestResults([]);
     setActiveTab("examples");
+    setHasAutoOpenedDrawer(false);
 
     try {
       const currentCode = editorRef.current?.getValue() || code;
@@ -197,6 +203,9 @@ export default function WorkspaceClient({ initialParams }: Props) {
       );
 
       setTestResults(results);
+
+      // 🆕 Test sonuçları hazır → drawer'ı aç (hem mobil hem desktop)
+      setShowTestDrawer(true);
 
       const passed = results.filter((r) => r.passed).length;
       const total = results.length;
@@ -440,6 +449,17 @@ export default function WorkspaceClient({ initialParams }: Props) {
           <div className="h-72 border-t border-white/5 bg-[#0a0e1a] flex flex-col flex-shrink-0">
             <div className="h-10 border-b border-white/5 flex items-center justify-between px-4 flex-shrink-0">
               <div className="flex items-center gap-1">
+                {/* 🆕 Drawer açma butonu — mobil için tab'ları bypass eder */}
+                <button
+                  onClick={() => setShowTestDrawer(true)}
+                  className="md:hidden px-2 py-1.5 rounded-md text-xs font-medium text-amber-400 hover:bg-amber-500/10 transition-colors flex items-center gap-1.5"
+                  title="Test sonuçlarını tam ekran aç"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+                  </svg>
+                  Aç
+                </button>
                 {(["examples", "tests", "console"] as const).map((tab) => (
                   <button
                     key={tab}
@@ -634,6 +654,29 @@ export default function WorkspaceClient({ initialParams }: Props) {
         </main>
       </div>
 
+      {/* 🆕 Test Case Drawer — hem mobil hem desktop için */}
+      <TestCaseDrawer
+        open={showTestDrawer}
+        onClose={() => setShowTestDrawer(false)}
+        results={testResults}
+        showExamples={true}
+        examples={testCases?.test_cases || []}
+      />
+
+      {/* 🆕 Share Modal — başarı sonrası tweet at */}
+      <CodeShareModal
+        open={showShareModal}
+        onClose={() => setShowShareModal(false)}
+        code={code}
+        language="python"
+        title={interview.title}
+        category={category}
+        username={user?.username}
+        durationLabel={formattedTime}
+        passedCount={passedCount}
+        totalCount={totalCount}
+      />
+
       <AnimatePresence>
         {showSuccessModal && (
           <motion.div
@@ -672,6 +715,15 @@ export default function WorkspaceClient({ initialParams }: Props) {
                     Sonraki Soru →
                   </button>
                 </div>
+                <button
+                  onClick={() => setShowShareModal(true)}
+                  className="mt-3 w-full py-3 rounded-xl bg-gradient-to-r from-sky-500/20 to-blue-500/20 hover:from-sky-500/30 hover:to-blue-500/30 border border-sky-400/30 hover:border-sky-400/50 text-sky-300 hover:text-sky-200 text-sm font-bold transition-all flex items-center justify-center gap-2"
+                >
+                  <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
+                  </svg>
+                  Çözümünü Paylaş & Tweetle
+                </button>
               </div>
             </motion.div>
           </motion.div>
