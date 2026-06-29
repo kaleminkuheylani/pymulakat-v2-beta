@@ -1,0 +1,24 @@
+﻿
+=== Cron Job Started: 06/28/2026 01:47:31 ===
+Running with uv...
+uv : C:\projelerim\gozbebgim\backend\services\gemini.py:7: FutureWarning: 
+At C:\projelerim\gozbebgim\backend\cron_job.ps1:20 char:16
++ ...      $out = uv run python services/gemini.py --generate-creative --co ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (C:\projelerim\g...FutureWarning: :String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+All support for the `google.generativeai` package has ended. It will no longer be receiving 
+updates or bug fixes. Please switch to the `google.genai` package as soon as possible.
+See README for more details:
+
+https://github.com/google-gemini/deprecated-generative-ai-python/blob/main/README.md
+
+  import google.generativeai as genai
+­şÜÇ Toplu Yarat─▒c─▒ Soru ├£retimi Ba┼şl─▒yor. Ba┼şlang─▒├ğ ID: 57, Adet: 1
+  Ô£à Soru 1/1 ├╝retildi (ID: 57): ­şîş Sosyal Medya ─░├ğerik Avc─▒s─▒: Trendleri Yakala!
+Ô£à 57 soru C:\projelerim\gozbebgim\backend\services\..\data\QUESTIONS.py dosyas─▒na kaydedildi
+Ô£à Supabase 'interwiews' tablosuna 1 yeni soru y├╝klendi/g├╝ncellendi.
+­şôğ E-posta ba┼şar─▒yla g├Ânderildi! Al─▒c─▒: kaleminkuheylani@gmail.com, ID: b1e58a75-9991-40a1-b1c0-1202079b0b7a
+=== Cron Job Finished: 06/28/2026 01:48:30 ===

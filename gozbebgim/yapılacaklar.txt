@@ -1,0 +1,122 @@
+içerik içerik içerik.
+
+function applyReadonlyDecorations(editor: any, monaco: any) {
+    const lineCount = starterLineCount.current;
+    if (lineCount <= 0) return;
+
+    const newDecorations = editor.deltaDecorations(
+      decorationIds.current,
+      [
+        {
+          range: new monaco.Range(1, 1, lineCount, Number.MAX_SAFE_INTEGER),
+          options: {
+            isWholeLine: true,
+            className: "monaco-readonly-line",
+            glyphMarginClassName: "monaco-readonly-glyph",
+            stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
+            hoverMessage: { value: "🔒 Bu alan düzenlenemez" },
+          },
+        },
+      ]
+    );
+    decorationIds.current = newDecorations;
+  }
+  useEffect(() => {
+    const redirectHome = () => router.push("/");
+    // Ctrl+V / Cmd+V keydown — Monaco swallows paste events at bubble phase,
+    // so we block the shortcut itself at capture phase too
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "v") {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        redirectHome();
+      }
+    };
+
+    // 2. Tab switch / window blur detection
+    const handleVisibilityChange = () => {
+      if (document.hidden) redirectHome();
+    };
+    document.addEventListener("keydown", handleKeyDown, true);  // capture!
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown, true);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [router]);
+  function handleEditorMount(editor: any, monaco: any) {
+    editorRef.current = editor;
+    monacoRef.current = monaco;
+
+    // Inject readonly styles
+    const styleId = "monaco-readonly-style";
+    if (!document.getElementById(styleId)) {
+      const style = document.createElement("style");
+      style.id = styleId;
+      style.textContent = `
+        .monaco-readonly-line {
+          background: rgba(255, 255, 255, 0.03) !important;
+          border-left: 2px solid rgba(251, 191, 36, 0.3) !important;
+          opacity: 0.55;
+        }
+        .monaco-readonly-glyph::before {
+          content: "🔒";
+          font-size: 10px;
+        }
+      `;
+      document.head.appendChild(style);
+    }
+
+    // Apply code and decorations if interview is already fetched
+    if (interview) {
+      const generated = buildPythonCode(interview);
+      editor.setValue(generated);
+      setCode(generated);
+      applyReadonlyDecorations(editor, monaco);
+    } else {
+      applyReadonlyDecorations(editor, monaco);
+    }
+
+    // Guard changes in the readonly (starter code) range
+    editor.onDidChangeModelContent((e: any) => {
+      if (isReverting.current) return;
+      const restricted = starterLineCount.current;
+      if (restricted <= 0) return;
+      const hasRestrictedChange = e.changes.some(
+        (change: any) => change.range.startLineNumber <= restricted
+      );
+      if (hasRestrictedChange) {
+        isReverting.current = true;
+        editor.trigger("readonly-guard", "undo", null);
+        setTimeout(() => {
+          isReverting.current = false;
+        }, 50);
+      }
+    });
+  }
+
+import pandas as pd
+
+# DataFrame oluştur
+df = pd.DataFrame(raw_data)
+
+# age sütununu numeric tipe çevir
+df["age"] = pd.to_numeric(df["age"], errors="coerce")
+
+# Eksik değerleri doldur
+df["age"] = df["age"].fillna(df["age"].median())
+df["salary"] = df["salary"].fillna(df["salary"].mean())
+df["name"] = df["name"].fillna("unknown")
+
+# department temizleme
+df["department"] = (
+    df["department"]
+    .str.strip()
+    .str.lower()
+)
+
+# Duplicate satırları kaldır
+df = df.drop_duplicates()
+
+# İsteğe bağlı: index sıfırla
+df = df.reset_index(drop=True)

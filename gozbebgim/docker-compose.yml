@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  # 🐘 Local PostgreSQL Database
+  db:
+    image: postgres:15-alpine
+    container_name: datascincetutor-db
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: localsecurepassword123
+      POSTGRES_DB: datascincetutor
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d datascincetutor"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # 🐍 FastAPI Backend
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: datascincetutor-backend
+    restart: always
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://postgres:localsecurepassword123@db:5432/datascincetutor
+      - RESEND_API_KEY=re_SNwZjbvB_bNhVKW6QPstjhB7eWiUdrdig # Override this in your local setup
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  postgres_data:

@@ -1,0 +1,14 @@
+{
+	"folders": [
+		{
+			"path": "../pymulakat"
+		},
+		{
+			"path": "backend/user"
+		},
+		{
+			"path": "backend"
+		}
+	],
+	"settings": {}
+}
