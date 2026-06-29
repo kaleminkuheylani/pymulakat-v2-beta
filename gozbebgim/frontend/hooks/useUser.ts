@@ -106,7 +106,16 @@ async function fetchMe(): Promise<UserResponse | null> {
   if (typeof window === "undefined") return null;
 
   const token = extractAccessToken();
-  if (!token) return null;
+  if (!token) {
+    console.log("👤 fetchMe: no token found");
+    return null;
+  }
+
+  // ✅ Token validation — JWT format check
+  if (!token.startsWith("eyJ")) {
+    console.warn("⚠️ fetchMe: token is not JWT format");
+    return null;
+  }
 
   try {
     const res = await fetch(`${API_BASE_URL}/auth/me`, {
@@ -117,25 +126,40 @@ async function fetchMe(): Promise<UserResponse | null> {
     });
 
     if (!res.ok) {
+      console.log(`👤 fetchMe: ${res.status}`);
+
       if (res.status === 401 || res.status === 403) {
-        // Token expired/invalid — Supabase client'ı temizle
-        const supabase = getSupabaseBrowser();
-        if (supabase) {
-          try {
-            await supabase.auth.signOut();
-          } catch {
-            // ignore
+        // Token invalid/expired — sadece localStorage temizle
+        // signOut() patlayabilir, OPLITE/try-catch
+        try {
+          const supabase = getSupabaseBrowser();
+          if (supabase?.auth?.signOut) {
+            await supabase.auth.signOut().catch(() => {
+              /* ignore */
+            });
           }
+        } catch {
+          /* ignore */
         }
-        localStorage.removeItem("sb-gozbegim-auth-token");
-        localStorage.removeItem("token");
-        localStorage.removeItem("user");
-        localStorage.removeItem("refresh_token");
+
+        // ✅ Try-catch ile localStorage temizleme
+        try {
+          localStorage.removeItem("sb-gozbegim-auth-token");
+          localStorage.removeItem("token");
+          localStorage.removeItem("user");
+          localStorage.removeItem("refresh_token");
+        } catch (storageErr) {
+          console.warn("⚠️ localStorage cleanup error:", storageErr);
+        }
       }
       return null;
     }
 
     const data = await res.json();
+    if (!data || typeof data !== "object") {
+      console.warn("⚠️ fetchMe: response is not an object");
+      return null;
+    }
 
     return {
       id: data.id || "",
@@ -151,7 +175,7 @@ async function fetchMe(): Promise<UserResponse | null> {
       solution_average_time_ms: data.solution_average_time_ms ?? 0,
     };
   } catch (err) {
-    console.error("fetchMe error:", err);
+    console.error("❌ fetchMe error:", err);
     return null;
   }
 }
@@ -191,22 +215,36 @@ export function useUser() {
   }, []);
 
   useEffect(() => {
-    fetchUser();
+    // ✅ fetchUser'ı try-catch ile çağır — patlarsa da devam et
+    fetchUser().catch((err) => {
+      console.warn("⚠️ fetchUser error in useEffect:", err);
+    });
 
     // Supabase tab'lar arası session değişikliğini dinle
     const supabase = getSupabaseBrowser();
     let sub: { unsubscribe: () => void } | null = null;
-    if (supabase) {
-      const { data } = supabase.auth.onAuthStateChange((_event, session) => {
-        if (session?.access_token) {
-          localStorage.setItem("token", session.access_token);
-          if (session.refresh_token) {
-            localStorage.setItem("refresh_token", session.refresh_token);
+    if (supabase?.auth?.onAuthStateChange) {
+      try {
+        const { data } = supabase.auth.onAuthStateChange((_event, session) => {
+          if (session?.access_token) {
+            try {
+              localStorage.setItem("token", session.access_token);
+              if (session.refresh_token) {
+                localStorage.setItem("refresh_token", session.refresh_token);
+              }
+            } catch (storageErr) {
+              console.warn("⚠️ localStorage write error:", storageErr);
+            }
           }
-        }
-        fetchUser();
-      });
-      sub = data.subscription;
+          // ✅ Re-entrant güvenliği — fetchUser içinde signOut patlarsa diye
+          fetchUser().catch((err) => {
+            console.warn("⚠️ fetchUser error in onAuthStateChange:", err);
+          });
+        });
+        sub = data.subscription;
+      } catch (subErr) {
+        console.warn("⚠️ Supabase subscription error:", subErr);
+      }
     }
 
     const onStorage = (e: StorageEvent) => {
@@ -215,18 +253,28 @@ export function useUser() {
         e.key === "logout" ||
         e.key?.endsWith("-auth-token")
       ) {
-        fetchUser();
+        fetchUser().catch(() => {});
       }
     };
-    const onAuthChange = () => fetchUser();
+    const onAuthChange = () => {
+      fetchUser().catch(() => {});
+    };
 
-    window.addEventListener("storage", onStorage);
-    window.addEventListener(AUTH_EVENT, onAuthChange);
+    try {
+      window.addEventListener("storage", onStorage);
+      window.addEventListener(AUTH_EVENT, onAuthChange);
+    } catch (listenerErr) {
+      console.warn("⚠️ event listener error:", listenerErr);
+    }
 
     return () => {
-      window.removeEventListener("storage", onStorage);
-      window.removeEventListener(AUTH_EVENT, onAuthChange);
-      sub?.unsubscribe();
+      try {
+        window.removeEventListener("storage", onStorage);
+        window.removeEventListener(AUTH_EVENT, onAuthChange);
+        sub?.unsubscribe();
+      } catch (cleanupErr) {
+        // ignore
+      }
     };
   }, [fetchUser]);
 
