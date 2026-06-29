@@ -395,42 +395,54 @@ async def logout():
     return MessageResponse(ok=True, message="Çıkış başarılı")
 
 
-@router.get("/me")
+@router.get("/me", response_model=None)
 async def get_me(request: Request):
-    """Mevcut kullanıcı + stats."""
+    """Mevcut kullanıcı + stats — debug-friendly."""
     try:
+        # 1. Auth
         user = await get_current_user(request)
+        logger.info(f"🔍 GET /me — user: {user.get('id', 'NONE')}")
         if not user:
             raise HTTPException(401, "Token gerekli")
 
         sb_admin = get_supabase_admin()
         user_id = user["id"]
 
+        # 2. Profile (defensive)
         profile = None
         try:
-            result = sb_admin.table("profiles").select("*").eq("id", user_id).maybe_single().execute()
-            profile = result.data
-        except Exception:
-            pass
+            result = sb_admin.table("profiles").select(
+                "id, username, email, is_verified, points"
+            ).eq("id", user_id).maybe_single().execute()
+            profile = result.data if result else None
+            logger.info(f"👤 Profile loaded: {bool(profile)}")
+        except Exception as e:
+            logger.warning(f"⚠️ Profile fetch error (non-fatal): {e}")
+            profile = None
 
+        # 3. Stats (defensive)
         total_attempts = success_count = fail_count = points = avg_time_ms = 0
         try:
-            attempts = sb_admin.table("interview_attempts").select(
+            res = sb_admin.table("interview_attempts").select(
                 "passed_tests, total_tests, success, execution_time_ms"
-            ).eq("user_id", user_id).execute().data or []
+            ).eq("user_id", user_id).execute()
+            attempts = res.data if res else []
             total_attempts = len(attempts)
             success_count = sum(1 for a in attempts if a.get("success"))
             fail_count = total_attempts - success_count
             points = sum(a.get("passed_tests", 0) * 10 for a in attempts if a.get("success"))
             if total_attempts > 0:
                 avg_time_ms = sum(a.get("execution_time_ms", 0) for a in attempts) / total_attempts
-        except Exception:
-            pass
+            logger.info(f"📊 Stats: {success_count}/{total_attempts} success")
+        except Exception as e:
+            logger.warning(f"⚠️ Stats fetch error (non-fatal): {e}")
 
+        # 4. Response
+        username = (profile or {}).get("username") or user.get("email", "").split("@")[0] or f"user_{user_id[:8]}"
         return {
             "id": user_id,
             "email": user.get("email"),
-            "username": (profile or {}).get("username", user.get("email", "").split("@")[0]),
+            "username": username,
             "is_verified": (profile or {}).get("is_verified", False),
             "points": points,
             "total_attempts": total_attempts,
@@ -443,4 +455,5 @@ async def get_me(request: Request):
     except HTTPException:
         raise
     except Exception as e:
+        logger.exception(f"💥 /me unexpected error")
         raise HTTPException(500, str(e))
