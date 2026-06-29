@@ -716,7 +716,12 @@ export default function WorkspaceClient({ initialParams }: Props) {
                   </button>
                 </div>
                 <button
-                  onClick={() => setShowShareModal(true)}
+                  onClick={() => {
+                    // ✅ Twitter Web Intent — yeni sekme, login gerekir
+                    const tweetText = `🐍 Python mülakat sorusu çözdüm! ✅\n\n${interview?.title || `Soru #${questionId}`}\n${totalCount}/${totalCount} test geçti (${formattedTime} sn)\n\nSen de Python mülakatına hazırlan 👇`;
+                    const tweetUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(tweetText)}&url=${encodeURIComponent(`https://www.pythonmulakat.com/interviews/${category}/${questionId}`)}&hashtags=PythonMulakat,Python,Kodlama`;
+                    window.open(tweetUrl, "_blank", "noopener,noreferrer");
+                  }}
                   className="mt-3 w-full py-3 rounded-xl bg-gradient-to-r from-sky-500/20 to-blue-500/20 hover:from-sky-500/30 hover:to-blue-500/30 border border-sky-400/30 hover:border-sky-400/50 text-sky-300 hover:text-sky-200 text-sm font-bold transition-all flex items-center justify-center gap-2"
                 >
                   <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">

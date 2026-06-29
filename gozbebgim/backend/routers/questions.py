@@ -1,13 +1,13 @@
 # backend/routers/questions.py
 # /api/v2/questions — RESTful, envelope, RFC uyumlu pagination
-# FIXED VERSION — test_cases güvenli normalize
+# ✅ FIX: tests endpoint anon erişilebilir
 
 from fastapi import APIRouter, HTTPException, Depends, Query
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field, ConfigDict
 from supabase import Client
 from question_loader import filter_questions, get_question
-from dependencies import get_current_user
+from dependencies import get_current_user, get_optional_user
 from supabase_client import get_supabase
 
 router = APIRouter(prefix="/api/v2/questions", tags=["questions-v2"])
@@ -101,74 +101,84 @@ def _extract_function_name(starter_code):
 
 
 # ═══════════════════════════════════════════════════════════════
-# ─── LIST — GET /api/v2/questions ──────────────────────────
+# ─── ENDPOINTS ───────────────────────────────────────────
 # ═══════════════════════════════════════════════════════════════
 
-@router.get("", response_model=QuestionsListResponse, responses={400: {"description": "Geçersiz sayfa"}})
+# ─── GET /api/v2/questions (paginated, list) ───────────
+@router.get("", response_model=QuestionsListResponse)
 def list_questions(
-    category: Optional[str] = Query(None),
-    level: Optional[str] = Query(None),
-    search: Optional[str] = Query(None),
-    tag: Optional[str] = Query(None),
+    category: Optional[str] = None,
+    level: Optional[str] = None,
+    search: Optional[str] = None,
+    tag: Optional[str] = None,
     page: int = Query(1, ge=1),
-    limit: int = Query(20, ge=1, le=500),
+    limit: int = Query(20, ge=1, le=100),
 ):
-    all_filtered = filter_questions(category=category, level=level, search=search, tag=tag)
-    total = len(all_filtered)
-    total_pages = max(1, (total + limit - 1) // limit)
-    if page > total_pages and total > 0:
-        raise HTTPException(400, f"Sayfa {page} mevcut değil.")
-    offset = (page - 1) * limit
-    page_items = all_filtered[offset:offset + limit]
-    items = [_to_question_out(q, include_starter=False) for q in page_items]
-    return QuestionsListResponse(
-        data=items,
-        meta=PaginationMeta(
-            page=page, limit=limit, total=total, total_pages=total_pages,
-            has_next=page < total_pages, has_prev=page > 1,
-            next_page=page + 1 if page < total_pages else None,
-            prev_page=page - 1 if page > 1 else None,
-        ),
-    )
+    """Tüm soruları listele (anon-friendly)."""
+    try:
+        all_questions = filter_questions(
+            category=category,
+            level=level,
+            search=search,
+            tag=tag,
+        )
+
+        total = len(all_questions)
+        start = (page - 1) * limit
+        end = start + limit
+        page_items = all_questions[start:end]
+        total_pages = (total + limit - 1) // limit if limit > 0 else 1
+
+        return QuestionsListResponse(
+            data=[_to_question_out(q) for q in page_items],
+            meta=PaginationMeta(
+                page=page,
+                limit=limit,
+                total=total,
+                total_pages=total_pages,
+                has_next=end < total,
+                has_prev=start > 0,
+                next_page=page + 1 if end < total else None,
+                prev_page=page - 1 if start > 0 else None,
+            ),
+        )
+    except Exception as e:
+        raise HTTPException(500, f"Sorular yüklenemedi: {str(e)}")
 
 
-# ═══════════════════════════════════════════════════════════════
-# ─── ALL — GET /api/v2/questions/all ─────────────────────
-# ═══════════════════════════════════════════════════════════════
-
+# ─── GET /api/v2/questions/all (anon SEO için) ───────
 @router.get("/all", response_model=AllQuestionsResponse)
-def list_all_questions(
-    category: Optional[str] = Query(None),
-    level: Optional[str] = Query(None),
-    search: Optional[str] = Query(None),
-    include_starter: bool = Query(False),
-):
-    all_filtered = filter_questions(category=category, level=level, search=search)
-    items = all_filtered[:500]
-    return AllQuestionsResponse(
-        data=[_to_question_out(q, include_starter=include_starter) for q in items],
-        total=len(items),
-    )
+def all_questions(category: Optional[str] = None):
+    """Tüm sorular — anonim erişim (sitemap için)."""
+    try:
+        qs = filter_questions(category=category)
+        return AllQuestionsResponse(
+            data=[_to_question_out(q) for q in qs],
+            total=len(qs),
+        )
+    except Exception as e:
+        raise HTTPException(500, f"Liste hatası: {str(e)}")
 
 
-# ═══════════════════════════════════════════════════════════════
-# ─── DETAIL — GET /api/v2/questions/{id} ───────────────────
-# ═══════════════════════════════════════════════════════════════
-
-@router.get("/{question_id}", response_model=QuestionOut, responses={404: {"description": "Soru bulunamadı"}})
-def get_question_detail(question_id: int, include_starter: bool = Query(False)):
+# ─── GET /api/v2/questions/{id} (detay) ───────────
+@router.get("/{question_id}", response_model=QuestionOut)
+def get_question_detail(question_id: int):
+    """Soru detayı (anon-friendly)."""
     q = get_question(question_id)
     if not q:
         raise HTTPException(404, f"Soru #{question_id} bulunamadı")
-    return _to_question_out(q, include_starter=include_starter)
+    return _to_question_out(q, include_starter=True)
 
 
-# ═══════════════════════════════════════════════════════════════
 # ─── TESTS — GET /api/v2/questions/{id}/tests ─────────────
-# ═══════════════════════════════════════════════════════════════
-
+# ✅ FIX: Anon erişime açık — test case'ler public bilgi
 @router.get("/{question_id}/tests", response_model=QuestionTestsResponse)
-def get_question_tests(question_id: int, user=Depends(get_current_user)):
+def get_question_tests(question_id: int, user: Optional[dict] = Depends(get_optional_user)):
+    """Test case'leri getir — anonim erişime açık.
+
+    Auth opsiyonel: yoksa bile görüntülenir (anon kullanıcı soru inceleyebilir).
+    Sadece attempt POST'u auth gerektirir.
+    """
     q = get_question(question_id)
     if not q:
         raise HTTPException(404, f"Soru #{question_id} bulunamadı")
@@ -187,7 +197,6 @@ def get_question_tests(question_id: int, user=Depends(get_current_user)):
                     "description": tc.get("description", ""),
                 })
             else:
-                # Beklenmedik tip — string/object — olduğu gibi geçir
                 safe_tests.append({"input": tc, "expected": None})
 
     function_name = _extract_function_name(starter_code) if starter_code else "solution"
@@ -197,13 +206,13 @@ def get_question_tests(question_id: int, user=Depends(get_current_user)):
         "title": _q_get(q, "title", ""),
         "function_name": function_name,
         "test_cases": safe_tests,
+        # ✅ Ek bilgi: client auth durumunu anlasın
+        "is_authenticated": user is not None,
     })
 
 
-# ═══════════════════════════════════════════════════════════════
 # ─── PROGRESS — GET /api/v2/questions/{id}/progress ───────
-# ═══════════════════════════════════════════════════════════════
-
+# Bu sadece authenticated users için
 @router.get("/{question_id}/progress", response_model=ProgressResponse)
 def get_question_progress(
     question_id: int,
