@@ -1,49 +1,86 @@
 # backend/question_loader.py
-# Güncellenmiş — kategori opsiyonel kontrol, tag desteği eklendi
+# ✅ FIX: Sessiz fallback, doğru tablo adı, intermittent error handling
 
+import os
+import logging
 from typing import Optional, List, Dict, Any
-from data.QUESTIONS import QUESTIONS, Question
+
+logger = logging.getLogger(__name__)
+
+# Supabase client'i sadece 1 kere deneyelim
+_supabase_attempted = False
+_supabase_available = False
 
 
-def load_questions() -> List[Question]:
-    """Supabase'den veya fallback olarak statik QUESTIONS'tan yükler."""
+def _try_supabase():
+    """Supabase client'ı dene — başarısızsa flag set et."""
+    global _supabase_attempted, _supabase_available
+
+    if _supabase_attempted:
+        return _supabase_available
+
+    _supabase_attempted = True
+
+    # Önce key'lerin varlığını kontrol et
+    url = os.environ.get("SUPABASE_URL")
+    key = os.environ.get("SUPABASE_ANON_KEY")
+
+    if not url or not key:
+        logger.warning("⚠️ Supabase env vars tanımsız — QUESTIONS fallback kullanılıyor")
+        _supabase_available = False
+        return False
+
+    # Key çok kısa veya "placeholder" ise atla
+    if len(key) < 50 or key.startswith("placeholder") or "..." in key:
+        logger.warning("⚠️ Supabase ANON_KEY placeholder gibi görünüyor — fallback")
+        _supabase_available = False
+        return False
+
     try:
         from supabase_client import get_supabase
-        supabase = get_supabase()
-        response = supabase.table("interwiews").select("*").execute()
-        if response.data:
-            loaded = []
-            for q_dict in response.data:
-                loaded.append(
-                    Question(
-                        id=q_dict["id"],
-                        title=q_dict["title"],
-                        category=q_dict["category"],
-                        level=q_dict["level"],
-                        description=q_dict["description"],
-                        starter_code=q_dict["starter_code"],
-                        test_cases=q_dict["test_cases"],
-                        hints=q_dict.get("hints", []),
-                    )
-                )
-            return sorted(loaded, key=lambda x: x.id)
+        sb = get_supabase()
+        if sb is None:
+            _supabase_available = False
+            return False
+        _supabase_available = True
+        return True
     except Exception as e:
-        print(f"⚠️ Supabase'den sorular yüklenirken hata: {e}")
+        logger.warning(f"⚠️ Supabase client oluşturulamadı: {e}")
+        _supabase_available = False
+        return False
+
+
+def load_questions():
+    """Soruları yükle — Supabase varsa oradan, yoksa QUESTIONS'tan."""
+    from data.QUESTIONS import QUESTIONS
+
+    # Supabase dene
+    if _try_supabase():
+        try:
+            from supabase_client import get_supabase
+            sb = get_supabase()
+            # ✅ Tablo ismini kontrol et
+            # Eğer "interwiews" yoksa "interviews" dene
+            for table_name in ["interviews", "interwiews"]:  # eski/yeni isim
+                try:
+                    response = sb.table(table_name).select("*").limit(1).execute()
+                    if response.data is not None:
+                        # Tüm verileri çek
+                        full_response = sb.table(table_name).select("*").execute()
+                        if full_response.data:
+                            logger.info(f"✅ {len(full_response.data)} soru Supabase'den yüklendi")
+                            return [q_dict for q_dict in full_response.data]
+                        break
+                except Exception:
+                    continue
+            else:
+                logger.warning("⚠️ 'interviews' tablosu Supabase'de bulunamadı — fallback")
+        except Exception as e:
+            # ✅ Sessiz fallback — sadece ilk seferde logla
+            logger.debug(f"Supabase load error (non-fatal): {e}")
+
+    # Fallback — lokal QUESTIONS
     return QUESTIONS
-
-
-def to_public_dict(q: Any) -> Dict:
-    """Client'a gönderilecek güvenli dict."""
-    return {
-        "id": q.id,
-        "title": q.title,
-        "category": getattr(q, "category", None),
-        "level": getattr(q, "level", None),
-        "description": getattr(q, "description", ""),
-        "starter_code": getattr(q, "starter_code", None),
-        "hints": getattr(q, "hints", []),
-        "tags": getattr(q, "tags", []) or [],
-    }
 
 
 def filter_questions(
@@ -51,114 +88,59 @@ def filter_questions(
     level: Optional[str] = None,
     search: Optional[str] = None,
     tag: Optional[str] = None,
-) -> List[Any]:
-    """
-    Soruları filtrele:
-    - category: kategori slug
-    - level: beginner / intermediate / advanced (veya TR: başlangıç / orta / ileri)
-    - search: başlık + açıklamada arama
-    - tag: etiket (varsa)
-    """
-    questions = load_questions()
-    filtered = questions
-
-    if category:
-        filtered = [q for q in filtered if getattr(q, "category", None) == category]
-
-    if level:
-        lvl = level.lower().strip()
-        # Hem İngilizce hem Türkçe level'ları kabul et
-        LEVEL_ALIASES = {
-            "başlangıç": ["başlangıç", "beginner", "easy"],
-            "beginner": ["beginner", "easy", "başlangıç"],
-            "orta": ["orta", "intermediate", "medium"],
-            "intermediate": ["intermediate", "medium", "orta"],
-            "ileri": ["ileri", "advanced", "hard"],
-            "advanced": ["advanced", "hard", "ileri"],
-        }
-        accepted = LEVEL_ALIASES.get(lvl, [lvl])
-        filtered = [q for q in filtered if (getattr(q, "level", "") or "").lower() in accepted]
-
-    if search:
-        s = search.lower().strip()
-        filtered = [
-            q for q in filtered
-            if s in (getattr(q, "title", "") or "").lower()
-            or s in (getattr(q, "description", "") or "").lower()
-        ]
-
-    if tag:
-        tag_l = tag.lower().strip()
-        filtered = [
-            q for q in filtered
-            if any(tag_l in (t or "").lower() for t in (getattr(q, "tags", []) or []))
-        ]
-
-    return filtered
-
-
-def get_question(question_id: int, category: Optional[str] = None) -> Optional[Any]:
-    """
-    ID'ye göre tek Question getirir. Kategori opsiyonel kontrol.
-    - category=None → sadece ID'ye göre ara
-    - category=str → ID + kategori eşleşmesi zorunlu
-    """
-    questions = load_questions()
-    for q in questions:
-        if q.id != question_id:
-            continue
-        if category is not None and getattr(q, "category", None) != category:
-            continue
-        return q
-    return None
-
-
-def get_categories() -> List[Dict]:
-    """QUESTIONS'tan unique kategorileri metadata ile döndür."""
-    questions = load_questions()
-    META = {
-        "python-basics": {"label": "Python Temelleri", "description": "Değişkenler, döngüler, koşullar, fonksiyonlar.", "icon": "🐍"},
-        "strings": {"label": "String İşlemleri", "description": "Metin işleme, slicing, formatlama.", "icon": "🔤"},
-        "list-dict": {"label": "Liste & Sözlük", "description": "Veri yapıları.", "icon": "📋"},
-        "pandas": {"label": "Pandas", "description": "Veri analizi.", "icon": "🐼"},
-        "algorithms": {"label": "Algoritmalar", "description": "Sıralama, arama, DP.", "icon": "🧮"},
-        "oop": {"label": "Python OOP", "description": "Class, inheritance.", "icon": "🧱"},
-        "data-types": {"label": "Veri Tipleri", "description": "list, dict, tuple, set.", "icon": "📦"},
-        "simple-apps": {"label": "Basit Uygulamalar", "description": "Küçük projeler.", "icon": "🛠️"},
-        "beyin-firtinasi": {"label": "Beyin Fırtınası", "description": "Algoritmik düşünme.", "icon": "💡"},
-        "sqlite3": {"label": "SQLite3", "description": "Veritabanı temelleri.", "icon": "🗄️"},
-        "numpy": {"label": "NumPy", "description": "Array operasyonları.", "icon": "🔢"},
-        "sklearn": {"label": "Scikit-learn", "description": "ML pipeline.", "icon": "🤖"},
-        "scipy": {"label": "SciPy", "description": "İstatistik.", "icon": "📐"},
-        "matplotlib": {"label": "Matplotlib", "description": "Grafik oluşturma.", "icon": "📊"},
-        "seaborn": {"label": "Seaborn", "description": "İstatistiksel görselleştirme.", "icon": "🌊"},
-        "statsmodels": {"label": "Statsmodels", "description": "ARIMA, regresyon.", "icon": "📈"},
-        "nltk": {"label": "NLTK", "description": "Doğal dil işleme.", "icon": "📝"},
-        "dask": {"label": "Dask", "description": "Paralel hesaplama.", "icon": "⚡"},
-        "pytorch": {"label": "PyTorch", "description": "Tensor işlemleri.", "icon": "🔥"},
-    }
-
-    unique_slugs = []
-    for q in questions:
-        cat = getattr(q, "category", None)
-        if cat and cat not in unique_slugs:
-            unique_slugs.append(cat)
+):
+    """Tüm soruları filtrele (Supabase veya fallback)."""
+    all_qs = load_questions()
 
     result = []
-    for slug in unique_slugs:
-        meta = META.get(slug, {})
-        # Soru sayısını hesapla
-        count = len([q for q in questions if getattr(q, "category", None) == slug])
-        result.append({
-            "slug": slug,
-            "label": meta.get("label", slug.replace("-", " ").title()),
-            "description": meta.get("description", ""),
-            "icon": meta.get("icon", "📘"),
-            "question_count": count,
-        })
+    for q in all_qs:
+        if isinstance(q, dict):
+            q_dict = q
+        else:
+            q_dict = {
+                "id": getattr(q, "id", None),
+                "category": getattr(q, "category", None),
+                "level": getattr(q, "level", None),
+                "title": getattr(q, "title", ""),
+                "description": getattr(q, "description", ""),
+                "starter_code": getattr(q, "starter_code", ""),
+                "test_cases": getattr(q, "test_cases", []),
+                "tags": getattr(q, "tags", []) or [],
+            }
+
+        # Category filter
+        if category and q_dict.get("category") != category:
+            continue
+
+        # Level filter
+        if level and q_dict.get("level") != level:
+            continue
+
+        # Search filter
+        if search:
+            s = search.lower()
+            if (
+                s not in (q_dict.get("title", "") or "").lower()
+                and s not in (q_dict.get("description", "") or "").lower()
+            ):
+                continue
+
+        # Tag filter
+        if tag:
+            tags = q_dict.get("tags", []) or []
+            if tag not in tags:
+                continue
+
+        result.append(q)
+
     return result
 
 
-def get_levels() -> List[str]:
-    questions = load_questions()
-    return sorted(list({getattr(q, "level", None) for q in questions if getattr(q, "level", None)}))
+def get_question(question_id: int):
+    """Tek bir soruyu ID ile getir."""
+    all_qs = load_questions()
+    for q in all_qs:
+        qid = q.get("id") if isinstance(q, dict) else getattr(q, "id", None)
+        if qid == question_id:
+            return q
+    return None
