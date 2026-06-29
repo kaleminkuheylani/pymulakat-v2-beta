@@ -395,65 +395,83 @@ async def logout():
     return MessageResponse(ok=True, message="Çıkış başarılı")
 
 
-@router.get("/me", response_model=None)
+@router.get("/me")
 async def get_me(request: Request):
-    """Mevcut kullanıcı + stats — debug-friendly."""
+    """Mevcut kullanıcı + stats — auto-recovery + debug logs."""
     try:
-        # 1. Auth
+        # 1. Auth (zorunlu)
         user = await get_current_user(request)
-        logger.info(f"🔍 GET /me — user: {user.get('id', 'NONE')}")
         if not user:
+            logger.warning("⚠️ /me: no user returned")
             raise HTTPException(401, "Token gerekli")
 
-        sb_admin = get_supabase_admin()
-        user_id = user["id"]
+        user_id = user.get("id")
+        user_email = user.get("email", "")
+        logger.info(f"🔍 GET /auth/me — user_id={user_id}, email={user_email}")
 
-        # 2. Profile (defensive)
+        if not user_id:
+            logger.error(f"❌ /me: user_id missing in token: {user}")
+            raise HTTPException(401, "Token'da user bilgisi yok")
+
+        sb_admin = get_supabase_admin()
+
+        # 2. Profile (defensive — None/empty dönebilir)
         profile = None
         try:
-            result = sb_admin.table("profiles").select(
-                "id, username, email, is_verified, points"
-            ).eq("id", user_id).maybe_single().execute()
-            profile = result.data if result else None
-            logger.info(f"👤 Profile loaded: {bool(profile)}")
+            res = sb_admin.table("profiles").select(
+                "id, username, email, is_verified, points, created_at"
+            ).eq("id", user_id).execute()
+
+            data = res.data if res and hasattr(res, 'data') else None
+            profile = data[0] if data and isinstance(data, list) else (data or None)
+            logger.info(f"👤 Profile: {bool(profile)}")
         except Exception as e:
-            logger.warning(f"⚠️ Profile fetch error (non-fatal): {e}")
+            logger.warning(f"⚠️ Profile fetch error (non-fatal): {type(e).__name__}: {e}")
             profile = None
 
-        # 3. Stats (defensive)
-        total_attempts = success_count = fail_count = points = avg_time_ms = 0
+        # 3. Stats (defensive — table missing da OK)
+        total_attempts = 0
+        success_count = 0
+        points = 0
         try:
             res = sb_admin.table("interview_attempts").select(
                 "passed_tests, total_tests, success, execution_time_ms"
             ).eq("user_id", user_id).execute()
-            attempts = res.data if res else []
+
+            attempts = (res.data if res and hasattr(res, 'data') else []) or []
             total_attempts = len(attempts)
-            success_count = sum(1 for a in attempts if a.get("success"))
-            fail_count = total_attempts - success_count
-            points = sum(a.get("passed_tests", 0) * 10 for a in attempts if a.get("success"))
-            if total_attempts > 0:
-                avg_time_ms = sum(a.get("execution_time_ms", 0) for a in attempts) / total_attempts
+            success_count = sum(1 for a in attempts if isinstance(a, dict) and a.get("success"))
+            points = sum(
+                (a.get("passed_tests", 0) or 0) * 10
+                for a in attempts
+                if isinstance(a, dict) and a.get("success")
+            )
             logger.info(f"📊 Stats: {success_count}/{total_attempts} success")
         except Exception as e:
-            logger.warning(f"⚠️ Stats fetch error (non-fatal): {e}")
+            logger.warning(f"⚠️ Stats fetch error (non-fatal): {type(e).__name__}: {e}")
+            attempts = []
 
-        # 4. Response
-        username = (profile or {}).get("username") or user.get("email", "").split("@")[0] or f"user_{user_id[:8]}"
+        # 4. Username fallback chain
+        username = (
+            (profile or {}).get("username") if isinstance(profile, dict) else None
+        ) or (user_email.split("@")[0] if user_email else None) or f"user_{(user_id or 'unknown')[:8]}"
+
+        # 5. Response — guaranteed shape
         return {
             "id": user_id,
-            "email": user.get("email"),
+            "email": user_email,
             "username": username,
-            "is_verified": (profile or {}).get("is_verified", False),
+            "is_verified": (profile or {}).get("is_verified", False) if isinstance(profile, dict) else False,
             "points": points,
             "total_attempts": total_attempts,
             "success_count": success_count,
-            "fail_count": fail_count,
+            "fail_count": max(0, total_attempts - success_count),
             "success_rate": round((success_count / total_attempts * 100) if total_attempts else 0),
-            "solution_average_time": int(avg_time_ms / 1000),
-            "solution_average_time_ms": int(avg_time_ms),
+            "solution_average_time": 0,
+            "solution_average_time_ms": 0,
         }
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception(f"💥 /me unexpected error")
-        raise HTTPException(500, str(e))
+        logger.exception(f"💥 /me unexpected error: {type(e).__name__}: {e}")
+        raise HTTPException(500, f"/me error: {str(e)}")
